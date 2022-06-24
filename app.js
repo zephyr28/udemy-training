@@ -6,13 +6,17 @@ require('dotenv').config({debug: false});
 // ***********************************************************************************************
 // Imports
 // ***********************************************************************************************
-console.log(process.env);
+const bcrypt = require('bcrypt');
 const express = require('express');
 const bodyParser = require('body-parser');
 const ejs = require('ejs');
 const mongoose = require('mongoose');
 const {Schema} = require("mongoose");
-const encrypt = require('mongoose-encryption');
+
+// ***********************************************************************************************
+// Configure bcrypt hashing
+// ***********************************************************************************************
+const saltRounds = 10;
 
 // ***********************************************************************************************
 // Create and configure the App
@@ -44,12 +48,8 @@ const userSchema = new Schema({
     password: {type: String, required: true}
 });
 
-// Configure encryption for the userSchema
-userSchema.plugin(encrypt, {secret: process.env.SECRET, encryptedFields: ['password']});
-
 // Create MongoDB model
 const User = mongoose.model('User', userSchema);
-
 
 // ***********************************************************************************************
 // ROUTE: /home
@@ -68,25 +68,27 @@ app.route('/login')
     })
     .post((req, res) => {
         const username = req.body.username;
-        const password = req.body.password;
+        const password = req.body.password; // Plain text from form
 
         // Confirm user/password exists in database
-        User.findOne(
-            {email: username},
-            (err, foundUser) => {
+        User.findOne({email: username}, (err, foundUser) => {
                 // An error occurred while looking up the user
                 if (err) {
                     console.log(err);
                 } else {
                     // Does the user exist?
                     if (foundUser) {
-                        // Is the password correct for this user?
-                        if (foundUser.password === password) {
-                            res.render('secrets');
-                        } else {
-                            console.log(`Incorrect password for user [${username}]!`);
-                        }
-                    } else {
+                        // Compare plain-text password with hashed password in DB
+                        bcrypt.compare(password, foundUser.password, (err, result) => {
+                            if (err) {
+                                console.log(err);
+                            } else if (result) { // Password hashes match
+                                res.render('secrets');
+                            } else {    // Password is incorrect
+                                console.log(`Incorrect password for user [${username}]!`);
+                            }
+                        });
+                    } else {    // No such username
                         console.log(`User [${username}] does not exist!`);
                     }
                 }
@@ -105,24 +107,33 @@ app.route('/register')
 
         // Get data from registration form
         const emailAddress = req.body.username;
-        const password = req.body.password;
+        const password = req.body.password; // Plain text
 
-        // Create the new User object
-        const newUser = new User({
-            email: emailAddress,
-            password: password
-        });
-
-        // Save the new User to the database
-        console.log(`Saving new User [${newUser.email}] to database ...`);
-        newUser.save((err, result) => {
+        // Generate the hash for the password. Since this takes time, we will actually save the user in a callback.
+        bcrypt.hash(password, saltRounds, (err, hash) => {
             if (err) {
                 console.log(err);
             } else {
-                console.log('User saved successfully.');
-                res.render('secrets');
+                // Create the new User object
+                const newUser = new User({
+                    email: emailAddress,
+                    password: hash
+                });
+
+                // Save the new User to the database
+                console.log(`Saving new User [${newUser.email}] to database ...`);
+                newUser.save((err, result) => {
+                    if (err) {
+                        console.log(err);
+                    } else {
+                        console.log('User saved successfully.');
+                        res.render('secrets');
+                    }
+                });
             }
         });
+
+
     });
 
 // ***********************************************************************************************
